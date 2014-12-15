@@ -29,6 +29,7 @@ type Model struct {
 	QuoteIdentifier string
 	ParamIdentifier string
 	ParamIteration  int
+	Prepare         func(string) (*sql.Stmt, error)
 }
 
 /**
@@ -42,6 +43,7 @@ func New(db *sql.DB, options ...interface{}) (m Model) {
 	} else if options[0] == "mssql" {
 		m = Model{Db: db, ColumnStr: "id", PrimaryKey: "id", QuoteIdentifier: "", ParamIdentifier: options[0].(string), ParamIteration: 1}
 	}
+	m.Prepare = db.Prepare
 	return
 }
 
@@ -224,7 +226,7 @@ func (orm *Model) FindMap() (resultsSlice []map[string][]byte, err error) {
 		fmt.Println(sqls)
 		fmt.Println(orm)
 	}
-	s, err := orm.Db.Prepare(sqls)
+	s, err := orm.Prepare(sqls)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +366,7 @@ func (orm *Model) generateSql() (a string) {
 
 //Execute sql
 func (orm *Model) Exec(finalQueryString string, args ...interface{}) (sql.Result, error) {
-	rs, err := orm.Db.Prepare(finalQueryString)
+	rs, err := orm.Prepare(finalQueryString)
 	if err != nil {
 		return nil, err
 	}
