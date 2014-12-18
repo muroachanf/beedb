@@ -42,6 +42,8 @@ func New(db *sql.DB, options ...interface{}) (m Model) {
 		m = Model{Db: db, ColumnStr: "id", PrimaryKey: "Id", QuoteIdentifier: "\"", ParamIdentifier: options[0].(string), ParamIteration: 1}
 	} else if options[0] == "mssql" {
 		m = Model{Db: db, ColumnStr: "id", PrimaryKey: "id", QuoteIdentifier: "", ParamIdentifier: options[0].(string), ParamIteration: 1}
+	} else if options[0] == "mysql" {
+		m = Model{Db: db, ColumnStr: "*", PrimaryKey: "Id", QuoteIdentifier: "`", ParamIdentifier: options[0].(string), ParamIteration: 1}
 	}
 	m.Prepare = db.Prepare
 	return
@@ -104,7 +106,7 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 		for i := 0; i < sliceElementType.NumField(); i++ {
 			bb := sliceElementType.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
-				orm.PrimaryKey = sliceElementType.Field(i).Name
+				orm.PrimaryKey, _ = getFieldMapKey(sliceElementType.Field(i))
 			}
 		}
 	} else {
@@ -112,7 +114,8 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 		for i := 0; i < tt.NumField(); i++ {
 			bb := tt.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
-				orm.PrimaryKey = tt.Field(i).Name
+				orm.PrimaryKey, _ = getFieldMapKey(tt.Field(i))
+				break
 			}
 		}
 	}
@@ -379,9 +382,51 @@ func (orm *Model) Exec(finalQueryString string, args ...interface{}) (sql.Result
 	return res, nil
 }
 
+func (orm *Model) Insert(output interface{}) error {
+	orm.ScanPK(output)
+
+	results, err := scanStructIntoMap(output)
+	if err != nil {
+		return err
+	}
+
+	if orm.TableName == "" {
+		orm.TableName = getTableName(output)
+	}
+	id := results[orm.PrimaryKey]
+
+	if id == nil {
+		return fmt.Errorf("Unable to save because primary key %q was not found in struct", orm.PrimaryKey)
+	}
+
+	if reflect.ValueOf(id).Int() == 0 {
+		delete(results, orm.PrimaryKey)
+	}
+	{
+		structPtr := reflect.ValueOf(output)
+
+		structVal := structPtr.Elem()
+
+		structField := structVal.FieldByName(orm.PrimaryKey)
+		id, err := orm.InsertMap(results)
+		if err != nil {
+			return err
+		}
+		var v interface{}
+		x, err := strconv.Atoi(strconv.FormatInt(id, 10))
+		if err != nil {
+			return err
+		}
+		v = x
+		structField.Set(reflect.ValueOf(v))
+		return nil
+	}
+}
+
 //if the struct has PrimaryKey == 0 insert else update
 func (orm *Model) Save(output interface{}) error {
 	orm.ScanPK(output)
+
 	results, err := scanStructIntoMap(output)
 	if err != nil {
 		return err
@@ -399,9 +444,11 @@ func (orm *Model) Save(output interface{}) error {
 
 	if reflect.ValueOf(id).Int() == 0 {
 		structPtr := reflect.ValueOf(output)
+
 		structVal := structPtr.Elem()
+
 		structField := structVal.FieldByName(orm.PrimaryKey)
-		id, err := orm.Insert(results)
+		id, err := orm.InsertMap(results)
 		if err != nil {
 			return err
 		}
@@ -416,7 +463,8 @@ func (orm *Model) Save(output interface{}) error {
 	} else {
 		var condition string
 		if orm.ParamIdentifier == "pg" {
-			condition = fmt.Sprintf("%v%v%v=$%v", orm.QuoteIdentifier, strings.ToLower(orm.PrimaryKey), orm.QuoteIdentifier, orm.ParamIteration)
+			condition = fmt.Sprintf("%v%v%v=$%v", orm.QuoteIdentifier,
+				strings.ToLower(orm.PrimaryKey), orm.QuoteIdentifier, orm.ParamIteration)
 		} else {
 			condition = fmt.Sprintf("%v%v%v=?", orm.QuoteIdentifier, orm.PrimaryKey, orm.QuoteIdentifier)
 		}
@@ -430,7 +478,7 @@ func (orm *Model) Save(output interface{}) error {
 }
 
 //inert one info
-func (orm *Model) Insert(properties map[string]interface{}) (int64, error) {
+func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 	defer orm.InitModel()
 	var keys []string
 	var placeholders []string
@@ -459,7 +507,15 @@ func (orm *Model) Insert(properties map[string]interface{}) (int64, error) {
 		fmt.Println(statement)
 		fmt.Println(orm)
 	}
+	if orm.ParamIdentifier == "mysql" {
+		id := properties[orm.PrimaryKey]
+		if id != nil {
+			statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=%v", statement,
+				orm.PrimaryKey, reflect.ValueOf(id).Int())
+		}
+	}
 	if orm.ParamIdentifier == "pg" {
+
 		statement = fmt.Sprintf("%v RETURNING %v", statement, snakeCasedName(orm.PrimaryKey))
 		var id int64
 		orm.Db.QueryRow(statement, args...).Scan(&id)
@@ -489,7 +545,7 @@ func (orm *Model) InsertBatch(rows []map[string]interface{}) ([]int64, error) {
 	}
 	for i := 0; i < len(rows); i++ {
 		orm.TableName = tablename
-		id, err := orm.Insert(rows[i])
+		id, err := orm.InsertMap(rows[i])
 		if err != nil {
 			return ids, err
 		}

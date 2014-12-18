@@ -2,6 +2,7 @@ package beedb
 
 import (
 	"errors"
+	//"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -89,6 +90,14 @@ func scanMapIntoStruct(obj interface{}, objMap map[string][]byte) error {
 
 	return nil
 }
+
+type DBValueMap interface {
+	GetValue() interface{}
+}
+
+var (
+	dbvalueMapType = reflect.TypeOf(new(DBValueMap)).Elem()
+)
 
 func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[string][]byte) error {
 
@@ -184,12 +193,44 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 
 		v = x
 	default:
-		return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
+		if field.Type.Implements(dbvalueMapType) {
+			v = fieldv.Interface().(DBValueMap).GetValue()
+		} else {
+			return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
+		}
 	}
 
 	fieldv.Set(reflect.ValueOf(v))
 
 	return nil
+}
+
+func getFieldMapKey(field reflect.StructField) (mapKey string, inline bool) {
+	fieldName := field.Name
+	bb := field.Tag
+	sqlTag := bb.Get("sql")
+	sqlTags := strings.Split(sqlTag, ",")
+	mapKey = ""
+	inline = false
+
+	if bb.Get("beedb") == "-" || sqlTag == "-" || reflect.ValueOf(bb).String() == "-" {
+		return
+	} else if len(sqlTag) > 0 {
+		//TODO: support tags that are common in json like omitempty
+		if sqlTags[0] == "-" {
+			return
+		}
+		mapKey = sqlTags[0]
+	} else {
+		mapKey = fieldName
+	}
+
+	if len(sqlTags) > 1 {
+		if stringArrayContains("inline", sqlTags[1:]) {
+			inline = true
+		}
+	}
+	return
 }
 
 func scanStructIntoMap(obj interface{}) (map[string]interface{}, error) {
@@ -204,34 +245,16 @@ func scanStructIntoMap(obj interface{}) (map[string]interface{}, error) {
 
 	for i := 0; i < dataStructType.NumField(); i++ {
 		field := dataStructType.Field(i)
-		fieldv := dataStruct.Field(i)
-		fieldName := field.Name
-		bb := field.Tag
-		sqlTag := bb.Get("sql")
-		sqlTags := strings.Split(sqlTag, ",")
-		var mapKey string
 
-		inline := false
+		mapKey, inline := getFieldMapKey(field)
 
-		if bb.Get("beedb") == "-" || sqlTag == "-" || reflect.ValueOf(bb).String() == "-" {
+		if mapKey == "" {
 			continue
-		} else if len(sqlTag) > 0 {
-			//TODO: support tags that are common in json like omitempty
-			if sqlTags[0] == "-" {
-				continue
-			}
-			mapKey = sqlTags[0]
-		} else {
-			mapKey = fieldName
-		}
-
-		if len(sqlTags) > 1 {
-			if stringArrayContains("inline", sqlTags[1:]) {
-				inline = true
-			}
 		}
 
 		if inline {
+			fieldv := dataStruct.Field(i)
+
 			// get an inner map and then put it inside the outer map
 			map2, err2 := scanStructIntoMap(fieldv.Interface())
 			if err2 != nil {
@@ -241,8 +264,12 @@ func scanStructIntoMap(obj interface{}) (map[string]interface{}, error) {
 				mapped[k] = v
 			}
 		} else {
-			value := dataStruct.FieldByName(fieldName).Interface()
-			mapped[mapKey] = value
+
+			if field.Type.Implements(dbvalueMapType) {
+				mapped[mapKey] = dataStruct.FieldByName(field.Name).Interface().(DBValueMap).GetValue()
+			} else {
+				mapped[mapKey] = dataStruct.FieldByName(field.Name).Interface()
+			}
 		}
 	}
 
