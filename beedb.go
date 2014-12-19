@@ -382,6 +382,18 @@ func (orm *Model) Exec(finalQueryString string, args ...interface{}) (sql.Result
 	return res, nil
 }
 
+func (orm *Model) primaryKeyIsEmpty(id interface{}) bool {
+	kind := reflect.TypeOf(id).Kind()
+	switch kind {
+	case reflect.Int:
+		return reflect.ValueOf(id).Int() == 0
+	case reflect.String:
+		return reflect.ValueOf(id).String() == ""
+	default:
+		panic(fmt.Sprintf("unsuported key type %v", kind.String()))
+	}
+}
+
 func (orm *Model) Insert(output interface{}) error {
 	orm.ScanPK(output)
 
@@ -399,7 +411,7 @@ func (orm *Model) Insert(output interface{}) error {
 		return fmt.Errorf("Unable to save because primary key %q was not found in struct", orm.PrimaryKey)
 	}
 
-	if reflect.ValueOf(id).Int() == 0 {
+	if orm.primaryKeyIsEmpty(id) {
 		delete(results, orm.PrimaryKey)
 	}
 	{
@@ -411,6 +423,9 @@ func (orm *Model) Insert(output interface{}) error {
 		id, err := orm.InsertMap(results)
 		if err != nil {
 			return err
+		}
+		if id == 0 {
+			return nil
 		}
 		var v interface{}
 		x, err := strconv.Atoi(strconv.FormatInt(id, 10))
@@ -510,8 +525,15 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 	if orm.ParamIdentifier == "mysql" {
 		id := properties[orm.PrimaryKey]
 		if id != nil {
-			statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=%v", statement,
-				orm.PrimaryKey, reflect.ValueOf(id).Int())
+			switch reflect.TypeOf(id).Kind() {
+			case reflect.String:
+				statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=?", statement, orm.PrimaryKey)
+				args = append(args, reflect.ValueOf(id).String())
+			default:
+				statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=?", statement, orm.PrimaryKey)
+				args = append(args, reflect.ValueOf(id).Int())
+			}
+
 		}
 	}
 	if orm.ParamIdentifier == "pg" {
