@@ -30,6 +30,8 @@ type Model struct {
 	ParamIdentifier string
 	ParamIteration  int
 	Prepare         func(string) (*sql.Stmt, error)
+	Sql             string
+	AutoIncrement   bool
 }
 
 /**
@@ -107,6 +109,9 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 			bb := sliceElementType.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
 				orm.PrimaryKey, _ = getFieldMapKey(sliceElementType.Field(i))
+				if bb.Get("autoinc") == "true" {
+					orm.AutoIncrement = true
+				}
 			}
 		}
 	} else {
@@ -115,6 +120,9 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 			bb := tt.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
 				orm.PrimaryKey, _ = getFieldMapKey(tt.Field(i))
+				if bb.Get("autoinc") == "true" {
+					orm.AutoIncrement = true
+				}
 				break
 			}
 		}
@@ -141,6 +149,12 @@ func (orm *Model) GroupBy(keys string) *Model {
 
 func (orm *Model) Having(conditions string) *Model {
 	orm.HavingStr = fmt.Sprintf("HAVING %v", conditions)
+	return orm
+}
+
+func (orm *Model) Query(query string, args ...interface{}) *Model {
+	orm.Sql = query
+	orm.ParamStr = args
 	return orm
 }
 
@@ -298,6 +312,12 @@ func (orm *Model) FindMap() (resultsSlice []map[string][]byte, err error) {
 }
 
 func (orm *Model) generateSql() (a string) {
+	if orm.Sql != "" {
+		defer func() {
+			orm.Sql = ""
+		}()
+		return orm.Sql
+	}
 	if orm.ParamIdentifier == "mssql" {
 		if orm.OffsetStr > 0 {
 			a = fmt.Sprintf("select ROW_NUMBER() OVER(order by %v )as rownum,%v from %v",
@@ -405,37 +425,32 @@ func (orm *Model) Insert(output interface{}) error {
 	if orm.TableName == "" {
 		orm.TableName = getTableName(output)
 	}
-	id := results[orm.PrimaryKey]
-
-	if id == nil {
+	if results[orm.PrimaryKey] == nil {
 		return fmt.Errorf("Unable to save because primary key %q was not found in struct", orm.PrimaryKey)
 	}
 
-	if orm.primaryKeyIsEmpty(id) {
-		delete(results, orm.PrimaryKey)
+	structPtr := reflect.ValueOf(output)
+
+	structVal := structPtr.Elem()
+
+	structField := structVal.FieldByName(orm.PrimaryKey)
+	//fmt.Println("inserting map")
+	id, err := orm.InsertMap(results)
+	if err != nil {
+		return err
 	}
-	{
-		structPtr := reflect.ValueOf(output)
-
-		structVal := structPtr.Elem()
-
-		structField := structVal.FieldByName(orm.PrimaryKey)
-		id, err := orm.InsertMap(results)
-		if err != nil {
-			return err
-		}
-		if id == 0 {
-			return nil
-		}
-		var v interface{}
-		x, err := strconv.Atoi(strconv.FormatInt(id, 10))
-		if err != nil {
-			return err
-		}
-		v = x
-		structField.Set(reflect.ValueOf(v))
+	if id == 0 {
 		return nil
 	}
+	var v interface{}
+	x, err := strconv.Atoi(strconv.FormatInt(id, 10))
+	if err != nil {
+		return err
+	}
+	v = x
+	structField.Set(reflect.ValueOf(v))
+	return nil
+
 }
 
 //if the struct has PrimaryKey == 0 insert else update
@@ -495,6 +510,11 @@ func (orm *Model) Save(output interface{}) error {
 //inert one info
 func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 	defer orm.InitModel()
+	id := properties[orm.PrimaryKey]
+	if orm.AutoIncrement {
+		delete(properties, orm.PrimaryKey)
+	}
+
 	var keys []string
 	var placeholders []string
 	var args []interface{}
@@ -523,8 +543,7 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 		fmt.Println(orm)
 	}
 	if orm.ParamIdentifier == "mysql" {
-		id := properties[orm.PrimaryKey]
-		if id != nil {
+		if !orm.primaryKeyIsEmpty(id) {
 			switch reflect.TypeOf(id).Kind() {
 			case reflect.String:
 				statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=?", statement, orm.PrimaryKey)
@@ -543,6 +562,7 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 		orm.Db.QueryRow(statement, args...).Scan(&id)
 		return id, nil
 	} else {
+		//fmt.Println("inserting:" + statement)
 		res, err := orm.Exec(statement, args...)
 		if err != nil {
 			return -1, err
@@ -640,7 +660,7 @@ func (orm *Model) Delete(output interface{}) (int64, error) {
 		orm.TableName = getTableName(output)
 	}
 	id := results[strings.ToLower(orm.PrimaryKey)]
-	condition := fmt.Sprintf("%v%v%v='%v'", orm.QuoteIdentifier, strings.ToLower(orm.PrimaryKey), orm.QuoteIdentifier, id)
+	condition := fmt.Sprintf("%v%v%v=?", orm.QuoteIdentifier, strings.ToLower(orm.PrimaryKey), orm.QuoteIdentifier)
 	statement := fmt.Sprintf("DELETE FROM %v%v%v WHERE %v",
 		orm.QuoteIdentifier,
 		orm.TableName,
@@ -650,7 +670,7 @@ func (orm *Model) Delete(output interface{}) (int64, error) {
 		fmt.Println(statement)
 		fmt.Println(orm)
 	}
-	res, err := orm.Exec(statement)
+	res, err := orm.Exec(statement, id)
 	if err != nil {
 		return -1, err
 	}
