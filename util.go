@@ -113,6 +113,7 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 	if len(sqlTags[0]) > 0 {
 		sqlFieldName = sqlTags[0]
 	}
+
 	inline := false
 	//omitempty := false //TODO!
 	// CHECK INLINE
@@ -137,6 +138,10 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 	// not inline
 
 	data, ok := objMap[sqlFieldName]
+
+	if !ok {
+		data, ok = objMap[strings.ToLower(sqlFieldName)]
+	}
 
 	if !ok {
 		return nil
@@ -172,6 +177,7 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 		v = x
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		x, err := strconv.ParseUint(string(data), 10, 64)
+
 		if err != nil {
 			return errors.New("arg " + sqlFieldName + " as int: " + err.Error())
 		}
@@ -288,6 +294,7 @@ func getTableName(s interface{}) string {
 	v := reflect.TypeOf(s)
 	if v.Kind() == reflect.String {
 		s2, _ := s.(string)
+		//fmt.Println("get table name:" + s2)
 		return snakeCasedName(s2)
 	}
 	tn := scanTableName(s)

@@ -305,7 +305,9 @@ func (orm *Model) FindMap() (resultsSlice []map[string][]byte, err error) {
 					result[key] = []byte("0")
 				}
 			}
+
 		}
+
 		resultsSlice = append(resultsSlice, result)
 	}
 	return resultsSlice, nil
@@ -414,42 +416,28 @@ func (orm *Model) primaryKeyIsEmpty(id interface{}) bool {
 	}
 }
 
-func (orm *Model) Insert(output interface{}) error {
+func (orm *Model) Insert(output interface{}) (int64, error) {
 	orm.ScanPK(output)
 
 	results, err := scanStructIntoMap(output)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if orm.TableName == "" {
 		orm.TableName = getTableName(output)
 	}
 	if results[orm.PrimaryKey] == nil {
-		return fmt.Errorf("Unable to save because primary key %q was not found in struct", orm.PrimaryKey)
+		return 0, fmt.Errorf("Unable to save because primary key %q was not found in struct", orm.PrimaryKey)
 	}
 
-	structPtr := reflect.ValueOf(output)
+	//structPtr := reflect.ValueOf(output)
 
-	structVal := structPtr.Elem()
+	//structVal := structPtr.Elem()
 
-	structField := structVal.FieldByName(orm.PrimaryKey)
+	//structField := structVal.FieldByName(orm.PrimaryKey)
 	//fmt.Println("inserting map")
-	id, err := orm.InsertMap(results)
-	if err != nil {
-		return err
-	}
-	if id == 0 {
-		return nil
-	}
-	var v interface{}
-	x, err := strconv.Atoi(strconv.FormatInt(id, 10))
-	if err != nil {
-		return err
-	}
-	v = x
-	structField.Set(reflect.ValueOf(v))
-	return nil
+	return orm.InsertMap(results)
 
 }
 
@@ -483,7 +471,7 @@ func (orm *Model) Save(output interface{}) error {
 			return err
 		}
 		var v interface{}
-		x, err := strconv.Atoi(strconv.FormatInt(id, 10))
+		x, err := strconv.Atoi(strconv.FormatInt(int64(id), 10))
 		if err != nil {
 			return err
 		}
@@ -513,6 +501,7 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 	id := properties[orm.PrimaryKey]
 	if orm.AutoIncrement {
 		delete(properties, orm.PrimaryKey)
+
 	}
 
 	var keys []string
@@ -542,6 +531,7 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 		fmt.Println(statement)
 		fmt.Println(orm)
 	}
+
 	if orm.ParamIdentifier == "mysql" {
 		if !orm.primaryKeyIsEmpty(id) {
 			switch reflect.TypeOf(id).Kind() {
