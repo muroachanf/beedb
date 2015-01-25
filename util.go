@@ -95,21 +95,20 @@ type DBValueMap interface {
 	GetValue() interface{}
 }
 
-var (
-	dbvalueMapType = reflect.TypeOf(new(DBValueMap)).Elem()
-)
-
 func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[string][]byte) error {
 
 	objFieldName := field.Name
 	bb := field.Tag
 	sqlTag := bb.Get("sql")
 
+	//fmt.Println("field", objFieldName, "sqltag", sqlTag)
+
 	if bb.Get("beedb") == "-" || sqlTag == "-" || reflect.ValueOf(bb).String() == "-" {
 		return nil
 	}
 	sqlTags := strings.Split(sqlTag, ",")
 	sqlFieldName := objFieldName
+
 	if len(sqlTags[0]) > 0 {
 		sqlFieldName = sqlTags[0]
 	}
@@ -138,10 +137,6 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 	// not inline
 
 	data, ok := objMap[sqlFieldName]
-
-	if !ok {
-		data, ok = objMap[strings.ToLower(sqlFieldName)]
-	}
 
 	if !ok {
 		return nil
@@ -199,8 +194,9 @@ func scanMapElement(fieldv reflect.Value, field reflect.StructField, objMap map[
 
 		v = x
 	default:
-		if field.Type.Implements(dbvalueMapType) {
-			v = fieldv.Interface().(DBValueMap).GetValue()
+
+		if vmap, ok := fieldv.Interface().(DBValueMap); ok {
+			v = vmap.GetValue()
 		} else {
 			return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
 		}
@@ -221,7 +217,8 @@ func getFieldMapKey(field reflect.StructField) (mapKey string, inline bool) {
 
 	if bb.Get("beedb") == "-" || sqlTag == "-" || reflect.ValueOf(bb).String() == "-" {
 		return
-	} else if len(sqlTag) > 0 {
+	}
+	if len(sqlTag) > 0 {
 		//TODO: support tags that are common in json like omitempty
 		if sqlTags[0] == "-" {
 			return
@@ -271,8 +268,8 @@ func scanStructIntoMap(obj interface{}) (map[string]interface{}, error) {
 			}
 		} else {
 
-			if field.Type.Implements(dbvalueMapType) {
-				mapped[mapKey] = dataStruct.FieldByName(field.Name).Interface().(DBValueMap).GetValue()
+			if v, ok := dataStruct.FieldByName(field.Name).Interface().(DBValueMap); ok {
+				mapped[mapKey] = v.GetValue()
 			} else {
 				mapped[mapKey] = dataStruct.FieldByName(field.Name).Interface()
 			}
@@ -294,7 +291,6 @@ func getTableName(s interface{}) string {
 	v := reflect.TypeOf(s)
 	if v.Kind() == reflect.String {
 		s2, _ := s.(string)
-		//fmt.Println("get table name:" + s2)
 		return snakeCasedName(s2)
 	}
 	tn := scanTableName(s)

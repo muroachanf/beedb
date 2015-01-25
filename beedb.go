@@ -14,24 +14,25 @@ var OnDebug = false
 var PluralizeTableNames = false
 
 type Model struct {
-	Db              *sql.DB
-	TableName       string
-	LimitStr        int
-	OffsetStr       int
-	WhereStr        string
-	ParamStr        []interface{}
-	OrderStr        string
-	ColumnStr       string
-	PrimaryKey      string
-	JoinStr         string
-	GroupByStr      string
-	HavingStr       string
-	QuoteIdentifier string
-	ParamIdentifier string
-	ParamIteration  int
-	Prepare         func(string) (*sql.Stmt, error)
-	Sql             string
-	AutoIncrement   bool
+	Db               *sql.DB
+	TableName        string
+	LimitStr         int
+	OffsetStr        int
+	WhereStr         string
+	ParamStr         []interface{}
+	OrderStr         string
+	ColumnStr        string
+	PrimaryKey       string
+	PrimaryFieldName string
+	JoinStr          string
+	GroupByStr       string
+	HavingStr        string
+	QuoteIdentifier  string
+	ParamIdentifier  string
+	ParamIteration   int
+	Prepare          func(string) (*sql.Stmt, error)
+	Sql              string
+	AutoIncrement    bool
 }
 
 /**
@@ -108,7 +109,9 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 		for i := 0; i < sliceElementType.NumField(); i++ {
 			bb := sliceElementType.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
-				orm.PrimaryKey, _ = getFieldMapKey(sliceElementType.Field(i))
+				field := sliceElementType.Field(i)
+				orm.PrimaryFieldName = field.Name
+				orm.PrimaryKey, _ = getFieldMapKey(field)
 				if bb.Get("autoinc") == "true" {
 					orm.AutoIncrement = true
 				}
@@ -120,6 +123,7 @@ func (orm *Model) ScanPK(output interface{}) *Model {
 			bb := tt.Field(i).Tag
 			if bb.Get("beedb") == "PK" || reflect.ValueOf(bb).String() == "PK" {
 				orm.PrimaryKey, _ = getFieldMapKey(tt.Field(i))
+				orm.PrimaryFieldName = tt.Field(i).Name
 				if bb.Get("autoinc") == "true" {
 					orm.AutoIncrement = true
 				}
@@ -461,22 +465,22 @@ func (orm *Model) Save(output interface{}) error {
 	}
 
 	if reflect.ValueOf(id).Int() == 0 {
-		structPtr := reflect.ValueOf(output)
+		structPtr := reflect.Indirect(reflect.ValueOf(output))
 
-		structVal := structPtr.Elem()
+		structField := structPtr.FieldByName(orm.PrimaryFieldName)
+		if !structField.IsValid() {
+			panic(errors.New(fmt.Sprint("can not find primary key field ", orm.PrimaryKey)))
+		}
 
-		structField := structVal.FieldByName(orm.PrimaryKey)
 		id, err := orm.InsertMap(results)
 		if err != nil {
 			return err
 		}
-		var v interface{}
-		x, err := strconv.Atoi(strconv.FormatInt(int64(id), 10))
+		x, err := strconv.Atoi(strconv.FormatInt(id, 10))
 		if err != nil {
 			return err
 		}
-		v = x
-		structField.Set(reflect.ValueOf(v))
+		structField.Set(reflect.ValueOf(x))
 		return nil
 	} else {
 		var condition string
@@ -498,10 +502,8 @@ func (orm *Model) Save(output interface{}) error {
 //inert one info
 func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 	defer orm.InitModel()
-	id := properties[orm.PrimaryKey]
 	if orm.AutoIncrement {
 		delete(properties, orm.PrimaryKey)
-
 	}
 
 	var keys []string
@@ -532,19 +534,6 @@ func (orm *Model) InsertMap(properties map[string]interface{}) (int64, error) {
 		fmt.Println(orm)
 	}
 
-	if orm.ParamIdentifier == "mysql" {
-		if !orm.primaryKeyIsEmpty(id) {
-			switch reflect.TypeOf(id).Kind() {
-			case reflect.String:
-				statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=?", statement, orm.PrimaryKey)
-				args = append(args, reflect.ValueOf(id).String())
-			default:
-				statement = fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v=?", statement, orm.PrimaryKey)
-				args = append(args, reflect.ValueOf(id).Int())
-			}
-
-		}
-	}
 	if orm.ParamIdentifier == "pg" {
 
 		statement = fmt.Sprintf("%v RETURNING %v", statement, snakeCasedName(orm.PrimaryKey))
